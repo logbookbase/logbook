@@ -1,0 +1,34 @@
+# dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# build
+dist/
+build/
+*.tsbuildinfo
+
+# secrets
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+
+# logs
+logs/
+*.log
+npm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# editors
+.vscode/
+.idea/
+*.swp
+
+# test coverage
+coverage/
+.nyc_output/
