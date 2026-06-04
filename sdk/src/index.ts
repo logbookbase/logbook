@@ -1,0 +1,16 @@
+export {
+  Logbook,
+  LogbookError,
+  generateKeypair,
+  didFromPublicKey,
+  GENESIS_HASH,
+  type LogbookConfig,
+  type Identity,
+  type RegisterOptions,
+  type LogOptions,
+  type LogResult,
+  type VerifyOptions,
+  type VerifyResult,
+  type EventPayload,
+  type Keypair,
+} from './logbook.js';

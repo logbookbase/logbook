@@ -1,0 +1,49 @@
+{
+  "name": "@logbook/sdk",
+  "version": "0.1.0",
+  "description": "signed action logs for ai agents",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run",
+    "prepublishOnly": "npm run build && npm test"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "@noble/curves": "^1.4.0",
+    "@noble/hashes": "^1.4.0",
+    "@scure/base": "^1.1.6"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "typescript": "^5.4.5",
+    "vitest": "^1.6.0"
+  },
+  "keywords": [
+    "ai-agents",
+    "audit-log",
+    "ed25519",
+    "base",
+    "x402"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/logbookbase/logbook.git",
+    "directory": "sdk"
+  }
+}

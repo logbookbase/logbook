@@ -4,6 +4,7 @@
   "description": "signed action logs for ai agents",
   "private": true,
   "type": "module",
+  "workspaces": ["sdk"],
   "engines": {
     "node": ">=20.0.0"
   },
@@ -13,10 +14,13 @@
     "start": "node dist/api/server.js",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:sdk": "npm test --workspace=sdk",
+    "build:sdk": "npm run build --workspace=sdk",
     "db:migrate": "tsx scripts/migrate.ts",
     "demo:crypto": "tsx scripts/crypto-demo.ts",
     "demo:register": "tsx scripts/register-demo.ts",
     "demo:events": "tsx scripts/events-demo.ts",
+    "demo:sdk": "tsx scripts/sdk-demo.ts",
     "lint": "eslint src --ext .ts",
     "typecheck": "tsc --noEmit"
   },
