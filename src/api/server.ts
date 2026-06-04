@@ -1,13 +1,15 @@
-import Fastify, { type FastifyInstance } from 'fastify';
+import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import rateLimit from '@fastify/rate-limit';
 import { config } from '../lib/config.js';
 import { logger } from '../lib/logger.js';
 import { sql, closeDb } from '../lib/db.js';
+import { HttpError } from '../lib/errors.js';
+import { agentsRoutes } from './routes/agents.js';
 
-export async function buildServer(): Promise<FastifyInstance> {
+export async function buildServer() {
   const app = Fastify({
-    logger,
+    logger: logger as any,
     trustProxy: true,
     bodyLimit: 1024 * 1024,
   });
@@ -46,12 +48,18 @@ export async function buildServer(): Promise<FastifyInstance> {
   });
 
   app.setErrorHandler((err, _req, reply) => {
+    if (err instanceof HttpError) {
+      reply.code(err.statusCode).send({ error: err.code, message: err.message });
+      return;
+    }
     app.log.error({ err }, 'unhandled error');
     const status = err.statusCode ?? 500;
     reply.code(status).send({
       error: status >= 500 ? 'internal_error' : err.message,
     });
   });
+
+  await app.register(agentsRoutes);
 
   return app;
 }
