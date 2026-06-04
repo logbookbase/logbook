@@ -16,6 +16,7 @@
     "db:migrate": "tsx scripts/migrate.ts",
     "demo:crypto": "tsx scripts/crypto-demo.ts",
     "demo:register": "tsx scripts/register-demo.ts",
+    "demo:events": "tsx scripts/events-demo.ts",
     "lint": "eslint src --ext .ts",
     "typecheck": "tsc --noEmit"
   },

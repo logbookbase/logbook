@@ -6,6 +6,7 @@ import { logger } from '../lib/logger.js';
 import { sql, closeDb } from '../lib/db.js';
 import { HttpError } from '../lib/errors.js';
 import { agentsRoutes } from './routes/agents.js';
+import { eventsRoutes } from './routes/events.js';
 
 export async function buildServer() {
   const app = Fastify({
@@ -60,6 +61,7 @@ export async function buildServer() {
   });
 
   await app.register(agentsRoutes);
+  await app.register(eventsRoutes);
 
   return app;
 }
