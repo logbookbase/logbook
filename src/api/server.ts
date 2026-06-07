@@ -8,6 +8,7 @@ import { sql, closeDb } from '../lib/db.js';
 import { HttpError } from '../lib/errors.js';
 import { agentsRoutes } from './routes/agents.js';
 import { eventsRoutes } from './routes/events.js';
+import { buildX402Middleware } from './middleware/x402.js';
 
 export function buildApp(): Hono {
   const app = new Hono();
@@ -33,6 +34,13 @@ export function buildApp(): Hono {
   });
 
   app.get('/', (c) => c.json({ name: 'logbook', version: '0.1.0' }));
+
+  // x402 payment middleware (only applies to routes it's configured for, like POST /events).
+  // If credentials are missing or pay-to is unset, this returns null and the endpoint stays free.
+  const x402 = buildX402Middleware();
+  if (x402) {
+    app.use('*', x402);
+  }
 
   app.route('/', agentsRoutes);
   app.route('/', eventsRoutes);

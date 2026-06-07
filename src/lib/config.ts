@@ -9,9 +9,9 @@ const ConfigSchema = z.object({
   DATABASE_URL: z.string().url(),
 
   X402_PAY_TO_ADDRESS: z.string().regex(/^0x[a-fA-F0-9]{40}$/).optional(),
-  X402_FACILITATOR_URL: z.string().url().optional(),
-  X402_FACILITATOR_API_KEY: z.string().optional(),
   X402_NETWORK: z.enum(['base', 'base-sepolia']).default('base-sepolia'),
+  CDP_API_KEY_ID: z.string().optional(),
+  CDP_API_KEY_SECRET: z.string().optional(),
 
   PRICE_EVENT_WRITE_USDC: z.coerce.number().int().positive().default(1000),
   PRICE_EVENT_BULK_USDC: z.coerce.number().int().positive().default(50000),
