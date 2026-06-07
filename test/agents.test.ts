@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import Fastify from 'fastify';
+import { Hono } from 'hono';
 import {
   generateKeypair,
   sign,
@@ -7,7 +7,6 @@ import {
   didFromPublicKey,
 } from '../src/crypto/index.js';
 
-// mock the db layer before importing the route
 vi.mock('../src/db/agents.js', () => ({
   createAgent: vi.fn(),
   getAgentByDid: vi.fn(),
@@ -31,17 +30,30 @@ function registrationMessage(input: {
   });
 }
 
-async function buildTestApp() {
-  const app = Fastify();
-  app.setErrorHandler((err, _req, reply) => {
+function buildTestApp(): Hono {
+  const app = new Hono();
+  app.route('/', agentsRoutes);
+  app.onError((err, c) => {
     if (err instanceof HttpError) {
-      reply.code(err.statusCode).send({ error: err.code, message: err.message });
-      return;
+      return c.json({ error: err.code, message: err.message }, err.statusCode as 400 | 401 | 404 | 409);
     }
-    reply.code(500).send({ error: 'internal_error' });
+    return c.json({ error: 'internal_error' }, 500);
   });
-  await app.register(agentsRoutes);
   return app;
+}
+
+async function postJson(app: Hono, path: string, body: unknown): Promise<{ status: number; json: any }> {
+  const res = await app.request(path, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  return { status: res.status, json: (await res.json()) as any };
+}
+
+async function getJson(app: Hono, path: string): Promise<{ status: number; json: any }> {
+  const res = await app.request(path);
+  return { status: res.status, json: (await res.json()) as any };
 }
 
 beforeEach(() => {
@@ -50,7 +62,7 @@ beforeEach(() => {
 
 describe('POST /agents', () => {
   it('registers a new agent with a valid signature', async () => {
-    const app = await buildTestApp();
+    const app = buildTestApp();
     const kp = generateKeypair();
     const did = didFromPublicKey(kp.publicKey);
     const display_name = 'test-bot';
@@ -67,58 +79,54 @@ describe('POST /agents', () => {
       created_at: new Date('2026-01-01T00:00:00Z'),
     });
 
-    const res = await app.inject({
-      method: 'POST',
-      url: '/agents',
-      payload: { public_key: kp.publicKey, display_name, metadata, signature },
+    const { status, json } = await postJson(app, '/agents', {
+      public_key: kp.publicKey,
+      display_name,
+      metadata,
+      signature,
     });
 
-    expect(res.statusCode).toBe(200);
-    const body = res.json();
-    expect(body.did).toBe(did);
-    expect(body.public_key).toBe(kp.publicKey);
-    expect(body.display_name).toBe(display_name);
+    expect(status).toBe(200);
+    expect(json.did).toBe(did);
+    expect(json.public_key).toBe(kp.publicKey);
+    expect(json.display_name).toBe(display_name);
     expect(vi.mocked(agentsDb.createAgent)).toHaveBeenCalledOnce();
   });
 
   it('rejects a bad signature with 401', async () => {
-    const app = await buildTestApp();
+    const app = buildTestApp();
     const kp = generateKeypair();
     const display_name = 'test-bot';
     const metadata = {};
-    // sign a different message than what we send
     const wrongMessage = registrationMessage({ public_key: kp.publicKey, display_name: 'other', metadata });
     const signature = sign(kp.privateKey, wrongMessage);
 
-    const res = await app.inject({
-      method: 'POST',
-      url: '/agents',
-      payload: { public_key: kp.publicKey, display_name, metadata, signature },
+    const { status, json } = await postJson(app, '/agents', {
+      public_key: kp.publicKey,
+      display_name,
+      metadata,
+      signature,
     });
 
-    expect(res.statusCode).toBe(401);
-    expect(res.json().error).toBe('bad_signature');
+    expect(status).toBe(401);
+    expect(json.error).toBe('bad_signature');
     expect(vi.mocked(agentsDb.createAgent)).not.toHaveBeenCalled();
   });
 
   it('rejects a malformed public_key with 400', async () => {
-    const app = await buildTestApp();
-    const res = await app.inject({
-      method: 'POST',
-      url: '/agents',
-      payload: {
-        public_key: 'not-hex',
-        display_name: 'x',
-        metadata: {},
-        signature: 'a'.repeat(128),
-      },
+    const app = buildTestApp();
+    const { status, json } = await postJson(app, '/agents', {
+      public_key: 'not-hex',
+      display_name: 'x',
+      metadata: {},
+      signature: 'a'.repeat(128),
     });
-    expect(res.statusCode).toBe(400);
-    expect(res.json().error).toBe('invalid_body');
+    expect(status).toBe(400);
+    expect(json.error).toBe('invalid_body');
   });
 
   it('returns 409 when did already exists', async () => {
-    const app = await buildTestApp();
+    const app = buildTestApp();
     const kp = generateKeypair();
     const did = didFromPublicKey(kp.publicKey);
     const display_name = 'test-bot';
@@ -134,20 +142,21 @@ describe('POST /agents', () => {
       created_at: new Date(),
     });
 
-    const res = await app.inject({
-      method: 'POST',
-      url: '/agents',
-      payload: { public_key: kp.publicKey, display_name, metadata, signature },
+    const { status, json } = await postJson(app, '/agents', {
+      public_key: kp.publicKey,
+      display_name,
+      metadata,
+      signature,
     });
 
-    expect(res.statusCode).toBe(409);
-    expect(res.json().error).toBe('already_registered');
+    expect(status).toBe(409);
+    expect(json.error).toBe('already_registered');
   });
 });
 
 describe('GET /agents/:did', () => {
   it('returns a registered agent with event_count', async () => {
-    const app = await buildTestApp();
+    const app = buildTestApp();
     const did = 'did:logbook:abc';
 
     vi.mocked(agentsDb.getAgentByDid).mockResolvedValueOnce({
@@ -159,19 +168,18 @@ describe('GET /agents/:did', () => {
     });
     vi.mocked(agentsDb.countEventsForAgent).mockResolvedValueOnce(7);
 
-    const res = await app.inject({ method: 'GET', url: '/agents/' + did });
-    expect(res.statusCode).toBe(200);
-    const body = res.json();
-    expect(body.did).toBe(did);
-    expect(body.event_count).toBe(7);
+    const { status, json } = await getJson(app, '/agents/' + did);
+    expect(status).toBe(200);
+    expect(json.did).toBe(did);
+    expect(json.event_count).toBe(7);
   });
 
   it('returns 404 for an unknown did', async () => {
-    const app = await buildTestApp();
+    const app = buildTestApp();
     vi.mocked(agentsDb.getAgentByDid).mockResolvedValueOnce(null);
 
-    const res = await app.inject({ method: 'GET', url: '/agents/did:logbook:nope' });
-    expect(res.statusCode).toBe(404);
-    expect(res.json().error).toBe('not_found');
+    const { status, json } = await getJson(app, '/agents/did:logbook:nope');
+    expect(status).toBe(404);
+    expect(json.error).toBe('not_found');
   });
 });

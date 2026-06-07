@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import Fastify from 'fastify';
+import { Hono } from 'hono';
 import {
   didFromPublicKey,
   eventMessage,
@@ -28,23 +28,35 @@ import * as eventsDb from '../src/db/events.js';
 import { eventsRoutes } from '../src/api/routes/events.js';
 import { HttpError } from '../src/lib/errors.js';
 
-async function buildTestApp() {
-  const app = Fastify();
-  app.setErrorHandler((err, _req, reply) => {
+function buildTestApp(): Hono {
+  const app = new Hono();
+  app.route('/', eventsRoutes);
+  app.onError((err, c) => {
     if (err instanceof HttpError) {
-      reply.code(err.statusCode).send({ error: err.code, message: err.message });
-      return;
+      return c.json({ error: err.code, message: err.message }, err.statusCode as 400 | 401 | 404 | 409);
     }
-    reply.code(500).send({ error: 'internal_error' });
+    return c.json({ error: 'internal_error' }, 500);
   });
-  await app.register(eventsRoutes);
   return app;
 }
 
+async function postJson(app: Hono, path: string, body: unknown) {
+  const res = await app.request(path, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  return { status: res.status, json: (await res.json()) as any };
+}
+
+async function getJson(app: Hono, path: string) {
+  const res = await app.request(path);
+  return { status: res.status, json: (await res.json()) as any };
+}
+
 function mockAgent(publicKey: string) {
-  const did = didFromPublicKey(publicKey);
   return {
-    did,
+    did: didFromPublicKey(publicKey),
     public_key: publicKey,
     display_name: 'test',
     metadata: {},
@@ -76,7 +88,7 @@ beforeEach(() => {
 
 describe('POST /events', () => {
   it('accepts a valid first event for a registered agent', async () => {
-    const app = await buildTestApp();
+    const app = buildTestApp();
     const kp = generateKeypair();
     const { payload, signature, event_hash } = buildSignedEvent(kp);
 
@@ -96,20 +108,14 @@ describe('POST /events', () => {
       created_at: new Date('2026-01-01T00:00:00Z'),
     });
 
-    const res = await app.inject({
-      method: 'POST',
-      url: '/events',
-      payload: { ...payload, signature },
-    });
-
-    expect(res.statusCode).toBe(200);
-    const body = res.json();
-    expect(body.event_hash).toBe(event_hash);
-    expect(body.seq_num).toBe(1);
+    const { status, json } = await postJson(app, '/events', { ...payload, signature });
+    expect(status).toBe(200);
+    expect(json.event_hash).toBe(event_hash);
+    expect(json.seq_num).toBe(1);
   });
 
   it('chains a second event when a previous one exists', async () => {
-    const app = await buildTestApp();
+    const app = buildTestApp();
     const kp = generateKeypair();
     const did = didFromPublicKey(kp.publicKey);
 
@@ -148,99 +154,72 @@ describe('POST /events', () => {
       created_at: new Date(),
     });
 
-    const res = await app.inject({
-      method: 'POST',
-      url: '/events',
-      payload: { ...payload, signature },
-    });
-    expect(res.statusCode).toBe(200);
+    const { status } = await postJson(app, '/events', { ...payload, signature });
+    expect(status).toBe(200);
   });
 
   it('rejects an unknown agent with 404', async () => {
-    const app = await buildTestApp();
+    const app = buildTestApp();
     const kp = generateKeypair();
     const { payload, signature } = buildSignedEvent(kp);
     vi.mocked(agentsDb.getAgentByDid).mockResolvedValueOnce(null);
 
-    const res = await app.inject({
-      method: 'POST',
-      url: '/events',
-      payload: { ...payload, signature },
-    });
-    expect(res.statusCode).toBe(404);
-    expect(res.json().error).toBe('unknown_agent');
+    const { status, json } = await postJson(app, '/events', { ...payload, signature });
+    expect(status).toBe(404);
+    expect(json.error).toBe('unknown_agent');
   });
 
   it('rejects wrong prev_hash with 409', async () => {
-    const app = await buildTestApp();
+    const app = buildTestApp();
     const kp = generateKeypair();
-    const { payload, signature } = buildSignedEvent(kp, {
-      prev_hash: 'b'.repeat(64),
-    });
+    const { payload, signature } = buildSignedEvent(kp, { prev_hash: 'b'.repeat(64) });
 
     vi.mocked(agentsDb.getAgentByDid).mockResolvedValueOnce(mockAgent(kp.publicKey));
     vi.mocked(eventsDb.getLatestEventForAgent).mockResolvedValueOnce(null);
 
-    const res = await app.inject({
-      method: 'POST',
-      url: '/events',
-      payload: { ...payload, signature },
-    });
-    expect(res.statusCode).toBe(409);
-    expect(res.json().error).toBe('bad_prev_hash');
+    const { status, json } = await postJson(app, '/events', { ...payload, signature });
+    expect(status).toBe(409);
+    expect(json.error).toBe('bad_prev_hash');
   });
 
   it('rejects wrong seq_num with 409', async () => {
-    const app = await buildTestApp();
+    const app = buildTestApp();
     const kp = generateKeypair();
     const { payload, signature } = buildSignedEvent(kp, { seq_num: 5 });
 
     vi.mocked(agentsDb.getAgentByDid).mockResolvedValueOnce(mockAgent(kp.publicKey));
     vi.mocked(eventsDb.getLatestEventForAgent).mockResolvedValueOnce(null);
 
-    const res = await app.inject({
-      method: 'POST',
-      url: '/events',
-      payload: { ...payload, signature },
-    });
-    expect(res.statusCode).toBe(409);
-    expect(res.json().error).toBe('bad_seq_num');
+    const { status, json } = await postJson(app, '/events', { ...payload, signature });
+    expect(status).toBe(409);
+    expect(json.error).toBe('bad_seq_num');
   });
 
   it('rejects a bad signature with 401', async () => {
-    const app = await buildTestApp();
+    const app = buildTestApp();
     const kp = generateKeypair();
     const other = generateKeypair();
     const { payload } = buildSignedEvent(kp);
-    // sign with a different key
     const wrongSig = sign(other.privateKey, eventMessage(payload));
 
     vi.mocked(agentsDb.getAgentByDid).mockResolvedValueOnce(mockAgent(kp.publicKey));
     vi.mocked(eventsDb.getLatestEventForAgent).mockResolvedValueOnce(null);
 
-    const res = await app.inject({
-      method: 'POST',
-      url: '/events',
-      payload: { ...payload, signature: wrongSig },
-    });
-    expect(res.statusCode).toBe(401);
-    expect(res.json().error).toBe('bad_signature');
+    const { status, json } = await postJson(app, '/events', { ...payload, signature: wrongSig });
+    expect(status).toBe(401);
+    expect(json.error).toBe('bad_signature');
   });
 
   it('rejects a malformed payload with 400', async () => {
-    const app = await buildTestApp();
-    const res = await app.inject({
-      method: 'POST',
-      url: '/events',
-      payload: { agent_did: 'x' }, // missing required fields
-    });
-    expect(res.statusCode).toBe(400);
+    const app = buildTestApp();
+    const { status } = await postJson(app, '/events', { agent_did: 'x' });
+    expect(status).toBe(400);
   });
 });
 
 describe('GET /events/:id', () => {
   it('returns the event when found', async () => {
-    const app = await buildTestApp();
+    const app = buildTestApp();
     vi.mocked(eventsDb.getEventById).mockResolvedValueOnce({
       id: 'evt-1',
       agent_did: 'did:logbook:abc',
@@ -254,22 +233,22 @@ describe('GET /events/:id', () => {
       x402_tx_hash: null,
       created_at: new Date('2026-01-01T00:00:00Z'),
     });
-    const res = await app.inject({ method: 'GET', url: '/events/evt-1' });
-    expect(res.statusCode).toBe(200);
-    expect(res.json().seq_num).toBe(1);
+    const { status, json } = await getJson(app, '/events/evt-1');
+    expect(status).toBe(200);
+    expect(json.seq_num).toBe(1);
   });
 
   it('returns 404 when not found', async () => {
-    const app = await buildTestApp();
+    const app = buildTestApp();
     vi.mocked(eventsDb.getEventById).mockResolvedValueOnce(null);
-    const res = await app.inject({ method: 'GET', url: '/events/nope' });
-    expect(res.statusCode).toBe(404);
+    const { status } = await getJson(app, '/events/nope');
+    expect(status).toBe(404);
   });
 });
 
 describe('GET /agents/:did/events', () => {
   it('returns paginated events for a known agent', async () => {
-    const app = await buildTestApp();
+    const app = buildTestApp();
     const did = 'did:logbook:abc';
     vi.mocked(agentsDb.getAgentByDid).mockResolvedValueOnce({
       did,
@@ -306,15 +285,15 @@ describe('GET /agents/:did/events', () => {
         created_at: new Date(),
       },
     ]);
-    const res = await app.inject({ method: 'GET', url: `/agents/${did}/events` });
-    expect(res.statusCode).toBe(200);
-    expect(res.json().count).toBe(2);
+    const { status, json } = await getJson(app, `/agents/${did}/events`);
+    expect(status).toBe(200);
+    expect(json.count).toBe(2);
   });
 });
 
 describe('GET /verify/:id', () => {
-  it('returns valid=true for an intact chain', async () => {
-    const app = await buildTestApp();
+  it('returns valid=true on a clean chain', async () => {
+    const app = buildTestApp();
     const kp = generateKeypair();
     const did = didFromPublicKey(kp.publicKey);
 
@@ -383,15 +362,14 @@ describe('GET /verify/:id', () => {
       },
     ]);
 
-    const res = await app.inject({ method: 'GET', url: '/verify/e2' });
-    expect(res.statusCode).toBe(200);
-    const body = res.json();
-    expect(body.valid).toBe(true);
-    expect(body.chain_length).toBe(2);
+    const { status, json } = await getJson(app, '/verify/e2');
+    expect(status).toBe(200);
+    expect(json.valid).toBe(true);
+    expect(json.chain_length).toBe(2);
   });
 
   it('returns hash_mismatch when metadata was tampered after signing', async () => {
-    const app = await buildTestApp();
+    const app = buildTestApp();
     const kp = generateKeypair();
     const did = didFromPublicKey(kp.publicKey);
 
@@ -406,14 +384,13 @@ describe('GET /verify/:id', () => {
     const originalHash = hashEvent(original);
     const originalSig = sign(kp.privateKey, eventMessage(original));
 
-    // db has tampered metadata but old hash and sig
     vi.mocked(eventsDb.getEventById).mockResolvedValueOnce({
       id: 'e1',
       agent_did: did,
       seq_num: '1',
       action: 'a',
       resource: null,
-      metadata: { amount: 999 }, // tampered
+      metadata: { amount: 999 },
       signature: originalSig,
       prev_hash: GENESIS_HASH,
       event_hash: originalHash,
@@ -437,9 +414,9 @@ describe('GET /verify/:id', () => {
       },
     ]);
 
-    const res = await app.inject({ method: 'GET', url: '/verify/e1' });
-    expect(res.statusCode).toBe(200);
-    expect(res.json().valid).toBe(false);
-    expect(res.json().reason).toBe('hash_mismatch');
+    const { status, json } = await getJson(app, '/verify/e1');
+    expect(status).toBe(200);
+    expect(json.valid).toBe(false);
+    expect(json.reason).toBe('hash_mismatch');
   });
 });

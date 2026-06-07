@@ -1,6 +1,7 @@
-import Fastify from 'fastify';
-import cors from '@fastify/cors';
-import rateLimit from '@fastify/rate-limit';
+import { Hono } from 'hono';
+import { cors } from 'hono/cors';
+import { HTTPException } from 'hono/http-exception';
+import { serve } from '@hono/node-server';
 import { config } from '../lib/config.js';
 import { logger } from '../lib/logger.js';
 import { sql, closeDb } from '../lib/db.js';
@@ -8,88 +9,74 @@ import { HttpError } from '../lib/errors.js';
 import { agentsRoutes } from './routes/agents.js';
 import { eventsRoutes } from './routes/events.js';
 
-export async function buildServer() {
-  const app = Fastify({
-    logger: logger as any,
-    trustProxy: true,
-    bodyLimit: 1024 * 1024,
-  });
+export function buildApp(): Hono {
+  const app = new Hono();
 
-  await app.register(cors, { origin: true });
-  await app.register(rateLimit, {
-    max: config.RATE_LIMIT_MAX,
-    timeWindow: config.RATE_LIMIT_WINDOW_MS,
-  });
+  app.use('*', cors({ origin: '*' }));
 
-  app.get('/health', async () => {
+  app.get('/health', async (c) => {
     const start = Date.now();
     let dbOk = false;
     try {
       await sql`SELECT 1`;
       dbOk = true;
     } catch (err) {
-      app.log.error({ err }, 'db health check failed');
+      logger.error({ err }, 'db health check failed');
     }
-    return {
+    return c.json({
       status: dbOk ? 'ok' : 'degraded',
       db: dbOk,
       uptime_s: Math.round(process.uptime()),
       response_ms: Date.now() - start,
       version: '0.1.0',
-    };
-  });
-
-  app.get('/', async () => ({
-    name: 'logbook',
-    version: '0.1.0',
-  }));
-
-  app.setNotFoundHandler((_req, reply) => {
-    reply.code(404).send({ error: 'not_found' });
-  });
-
-  app.setErrorHandler((err, _req, reply) => {
-    if (err instanceof HttpError) {
-      reply.code(err.statusCode).send({ error: err.code, message: err.message });
-      return;
-    }
-    app.log.error({ err }, 'unhandled error');
-    const status = err.statusCode ?? 500;
-    reply.code(status).send({
-      error: status >= 500 ? 'internal_error' : err.message,
     });
   });
 
-  await app.register(agentsRoutes);
-  await app.register(eventsRoutes);
+  app.get('/', (c) => c.json({ name: 'logbook', version: '0.1.0' }));
+
+  app.route('/', agentsRoutes);
+  app.route('/', eventsRoutes);
+
+  app.notFound((c) => c.json({ error: 'not_found' }, 404));
+
+  app.onError((err, c) => {
+    if (err instanceof HttpError) {
+      return c.json({ error: err.code, message: err.message }, err.statusCode as 400 | 401 | 404 | 409);
+    }
+    if (err instanceof HTTPException) {
+      return err.getResponse();
+    }
+    logger.error({ err }, 'unhandled error');
+    return c.json({ error: 'internal_error' }, 500);
+  });
 
   return app;
 }
 
-async function start(): Promise<void> {
-  const app = await buildServer();
+export async function start(): Promise<void> {
+  const app = buildApp();
+
+  const server = serve(
+    { fetch: app.fetch, port: config.PORT, hostname: '0.0.0.0' },
+    (info) => {
+      logger.info({ port: info.port }, 'server listening');
+    },
+  );
 
   const shutdown = async (signal: string): Promise<void> => {
-    app.log.info({ signal }, 'shutting down');
+    logger.info({ signal }, 'shutting down');
     try {
-      await app.close();
+      server.close();
       await closeDb();
       process.exit(0);
     } catch (err) {
-      app.log.error({ err }, 'shutdown failed');
+      logger.error({ err }, 'shutdown failed');
       process.exit(1);
     }
   };
 
   process.on('SIGTERM', () => void shutdown('SIGTERM'));
   process.on('SIGINT', () => void shutdown('SIGINT'));
-
-  try {
-    await app.listen({ port: config.PORT, host: '0.0.0.0' });
-  } catch (err) {
-    app.log.error({ err }, 'failed to start');
-    process.exit(1);
-  }
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
